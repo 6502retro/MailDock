@@ -304,7 +304,7 @@ final class RendererTests: XCTestCase {
         XCTAssertEqual(d.blocks.map(text), ["Hi", "after"])
     }
     func testHiddenPreheaderIsRemovedButSmallFontIsNot() {
-        let d = EmailRenderer.renderHTML(#"<div style="display:none;max-height:0">Preheader <div>nested</div> text</div><span style="font-size: 0px">zero</span><p style="font-size:0.9em;opacity:0.8">kept</p><div hidden>h</div><p style="max-height: 0; overflow:hidden">gone</p>"#)
+        let d = EmailRenderer.renderHTML(#"<div style="display:none;max-height:0">Preheader <div>nested</div> text</div><span style="opacity: 0">zero</span><p style="font-size:0.9em;opacity:0.8">kept</p><div hidden>h</div><p style="max-height: 0; overflow:hidden">gone</p>"#)
         XCTAssertEqual(d.blocks.map(text), ["kept"])
     }
     func testInlineStyles() throws {
@@ -983,5 +983,32 @@ final class StoreTests: XCTestCase {
             let perms = try FileManager.default.attributesOfItem(atPath: dir.appendingPathComponent(file).path)[.posixPermissions] as! NSNumber
             XCTAssertEqual(perms.intValue, 0o600, file)
         }
+    }
+}
+
+final class ColumnLayoutTests: XCTestCase {
+    /// Squarespace, MJML and many newsletter tools set font-size:0 on column wrappers.
+    func testZeroFontSizeColumnWrappersAreNotHidden() {
+        let html = """
+        <div style="display:none;font-size:1px;max-height:0px;overflow:hidden;">Preheader</div>
+        <div style="margin:0px auto;max-width:600px;">
+          <table><tr><td style="direction:ltr;font-size:0px;padding:20px 0;text-align:center;">
+            <div class="mj-column-per-100" style="font-size:0px;text-align:left;direction:ltr;display:inline-block;vertical-align:top;width:100%;">
+              <table><tr><td style="font-size:0px;padding:10px 25px;word-break:break-word;">
+                <div style="font-family:Helvetica;font-size:28px;line-height:1.3;color:#000;">Updates to Stripe's legal terms</div>
+              </td></tr>
+              <tr><td style="font-size:0px;padding:10px 25px;"><div style="font-size:16px">As a user of Squarespace Payments</div></td></tr></table>
+            </div>
+          </td></tr></table>
+        </div>
+        """
+        let doc = EmailRenderer.renderHTML(html)
+        XCTAssertEqual(doc.blocks.map(text), ["Updates to Stripe's legal terms", "As a user of Squarespace Payments"])
+    }
+    func testFallsBackToPlainTextWhenHTMLHasNoText() {
+        let m = MailMessage(id: "m", threadID: "t", labelIDs: [], from: .init(name: "", email: "a@b.c"), to: [], cc: [], replyTo: [], subject: "", date: Date(), messageIDHeader: "", references: "", snippet: "snip", plainBody: "Plain version", htmlBody: "<div style=\"display:none\">x</div>", attachments: [], inlineImages: [])
+        XCTAssertEqual(EmailRenderer.render(message: m).plainText, "Plain version")
+        var noPlain = m; noPlain.plainBody = nil
+        XCTAssertEqual(EmailRenderer.render(message: noPlain).plainText, "snip")
     }
 }

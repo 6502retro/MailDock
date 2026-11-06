@@ -1,5 +1,5 @@
-MailDock 1.1
-============
+MailDock 1.1.1
+==============
 A native Mac app for Gmail, with every account open in one sidebar.
 It's laid out like Gmail on the web, but it isn't a web page.
 Requires macOS 14 Sonoma or later. Works on Apple silicon and Intel.

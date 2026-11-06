@@ -48,6 +48,10 @@ struct EmailDocument: Hashable {
 
     var mainBlocks: [EmailBlock] { blocks.filter { $0.quoteDepth == 0 } }
 
+    var hasText: Bool {
+        blocks.contains { if case .text(let runs, _) = $0.kind { return runs.contains { !$0.text.isEmpty } }; return false }
+    }
+
     /// True when there's quoted history that can be folded away under a new message.
     var hasCollapsibleQuote: Bool { !mainBlocks.isEmpty && mainBlocks.count < blocks.count }
 
@@ -117,8 +121,19 @@ enum HTMLEntities {
 
 enum EmailRenderer {
     static func render(message: MailMessage) -> EmailDocument {
-        if let html = message.htmlBody, !html.isEmpty { return renderHTML(html) }
-        return renderPlain(message.plainBody ?? message.snippet)
+        if let html = message.htmlBody, !html.isEmpty {
+            let document = renderHTML(html)
+            if document.hasText { return document }
+        }
+        // Never show a blank message: fall back to the plain-text version, then the preview.
+        if let plain = message.plainBody, !plain.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return renderPlain(plain)
+        }
+        if let html = message.htmlBody, !html.isEmpty {
+            let document = renderHTML(html)
+            if !document.blocks.isEmpty { return document }
+        }
+        return renderPlain(message.snippet)
     }
 
     static func safeLink(_ value: String) -> URL? {
@@ -204,7 +219,8 @@ private struct HTMLBuilder {
         "dl", "dt", "dd", "form", "fieldset", "figure", "figcaption", "body", "html", "caption",
     ]
     private static let hiddenPattern = try! NSRegularExpression(
-        pattern: #"(?:^|;)(?:font-size|max-height|opacity):0(?:px|pt|em|rem|%)?(?:!important)?(?:;|$)"#)
+        // font-size:0 is left out on purpose: email layouts use it on column wrappers.
+        pattern: #"(?:^|;)(?:max-height|opacity):0(?:px|pt|em|rem|%)?(?:!important)?(?:;|$)"#)
 
     var blocks = [EmailBlock]()
     private var stack = [Element]()
