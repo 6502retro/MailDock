@@ -1,5 +1,5 @@
 #!/bin/bash
-# MailDock 1.0 - builds the Mac app on this computer.
+# MailDock 1.1 - builds the Mac app on this computer.
 # Run from Terminal:  bash ~/Downloads/MailDock/install.command
 DIR="$(cd "$(dirname "$0")" && pwd)"
 NAME="MailDock"

@@ -1,6 +1,7 @@
-MailDock 1.0
+MailDock 1.1
 ============
 A native Mac app for Gmail, with every account open in one sidebar.
+It's laid out like Gmail on the web, but it isn't a web page.
 Requires macOS 14 Sonoma or later. Works on Apple silicon and Intel.
 
 INSTALL
@@ -47,6 +48,14 @@ account may be blocked by its administrator.
 
 USING IT
 - The sidebar lists All Inboxes, then each account with its folders and labels.
+  Click an account's name to fold it away, and More for Important, All Mail,
+  Spam and Trash. The menu button at the top left shrinks the sidebar.
+- Click a conversation to open it; the back arrow returns to the list.
+  Tick checkboxes to act on several conversations at once. Hover over a row
+  for quick archive, delete and read/unread buttons.
+- Compose opens a message window in the bottom-right corner. You can have
+  several, minimize them, or make one full screen. Replies are written right
+  under the conversation; the pop-out button moves one into its own window.
 - Search works just like Gmail: from:ann has:attachment older_than:1y
 - Inbox tabs (Primary, Promotions and so on) are above the message list.
 - Images stay hidden until you click Show Images, so senders can't tell you
@@ -54,13 +63,15 @@ USING IT
 - New mail is checked for every 60 seconds while the app is open.
 
 SHORTCUTS
-With the message list selected, Gmail's keys work:
-  c new   r reply   a reply all   f forward   e archive   # trash
-  ! spam  s star    u unread      j next      k previous
+Gmail's single keys work whenever you aren't typing in a box:
+  c compose   / search    j / k next / previous   o or Return open
+  x select    e archive   # delete    ! spam      s star
+  Shift-I read   Shift-U unread
+  In a conversation: r reply   a reply all   f forward   u or Esc back
 Menu shortcuts:
   Cmd-N new message    Cmd-R reply    Shift-Cmd-R reply all
   Shift-Cmd-F forward  Cmd-E archive  Cmd-Delete trash
-  Shift-Cmd-N check for new mail      Cmd-Return send (in a message window)
+  Cmd-[ back to list                  Shift-Cmd-N check for new mail
 
 GOOD TO KNOW
 - Emails appear as native text and pictures, with no web engine. That's safer

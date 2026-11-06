@@ -67,16 +67,11 @@ struct MailDockApp: App {
         Window("MailDock", id: "main") {
             RootView()
                 .environmentObject(store)
-                .frame(minWidth: 980, minHeight: 600)
+                .frame(minWidth: 1000, minHeight: 620)
         }
-        .defaultSize(width: 1280, height: 800)
+        .windowStyle(.hiddenTitleBar)
+        .defaultSize(width: 1400, height: 880)
         .commands { MailCommands(store: store) }
-
-        WindowGroup("New Message", id: "compose", for: UUID.self) { $sessionID in
-            ComposeWindow(sessionID: sessionID)
-                .environmentObject(store)
-        }
-        .defaultSize(width: 680, height: 560)
 
         Settings {
             SettingsView()
@@ -97,12 +92,9 @@ struct MailCommands: Commands {
 
 struct MailMenuNew: View {
     @ObservedObject var store: MailStore
-    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        Button("New Message") {
-            if let id = store.newMessage() { openWindow(id: "compose", value: id) }
-        }
+        Button("New Message") { _ = store.newMessage() }
         .keyboardShortcut("n")
         .disabled(store.accounts.isEmpty)
     }
@@ -110,10 +102,9 @@ struct MailMenuNew: View {
 
 struct MailMenuItems: View {
     @ObservedObject var store: MailStore
-    @Environment(\.openWindow) private var openWindow
 
-    private var hasSelection: Bool { !store.selectedThreads.isEmpty }
-    private var hasDetail: Bool { store.detail?.replyTarget != nil }
+    private var hasSelection: Bool { !store.actionTargets.isEmpty }
+    private var hasDetail: Bool { store.openThread != nil && store.detail?.replyTarget != nil }
 
     var body: some View {
         Button("Reply") { compose(all: false) }
@@ -135,33 +126,25 @@ struct MailMenuItems: View {
         Button("Add Star") { run(.star) }
             .keyboardShortcut("l", modifiers: [.command, .shift]).disabled(!hasSelection)
         Divider()
+        Button("Back to List") { store.closeThread() }
+            .keyboardShortcut("[").disabled(store.openThread == nil)
         Button("Check for New Mail") { Task { await store.reload() } }
             .keyboardShortcut("n", modifiers: [.command, .shift])
     }
 
     private func run(_ action: ThreadAction) {
-        let targets = store.selectedThreads
+        let targets = store.actionTargets
         Task { await store.perform(action, on: targets) }
     }
 
     private func compose(all: Bool) {
-        guard let detail = store.detail, let target = detail.replyTarget,
-              let id = store.reply(target, all: all, account: detail.account) else { return }
-        openWindow(id: "compose", value: id)
+        guard let detail = store.detail, let target = detail.replyTarget else { return }
+        _ = store.reply(target, all: all, account: detail.account, inline: true)
     }
 
     private func forward() {
         guard let detail = store.detail, let target = detail.replyTarget else { return }
-        Task {
-            if let id = await store.forward(target, account: detail.account) { openWindow(id: "compose", value: id) }
-        }
-    }
-}
-
-extension Account {
-    var color: Color {
-        let palette: [Color] = [.blue, .red, .green, .orange, .purple, .teal]
-        return palette[colorIndex % palette.count]
+        Task { _ = await store.forward(target, account: detail.account, inline: true) }
     }
 }
 

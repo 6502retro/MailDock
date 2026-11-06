@@ -78,6 +78,11 @@ final class MailStore: ObservableObject {
     @Published var banner: String?
     @Published var undo: (title: String, action: ThreadAction, targets: [ThreadSummary])?
     @Published var isOffline = false
+    /// The conversation shown in place of the list, as in Gmail.
+    @Published var openThread: ThreadSummary?
+    /// Compose windows in the order they were opened.
+    @Published var composeOrder: [UUID] = []
+    @Published var maximizedCompose: UUID?
 
     var backgroundSyncEnabled = true
     var onNewMail: (([ThreadSummary]) -> Void)?
@@ -305,7 +310,7 @@ final class MailStore: ObservableObject {
         if mailbox?.account == email { mailbox = defaultMailbox() }
         threads.removeAll { $0.account == email }
         selection = []
-        detail = nil
+        if openThread?.account == email { closeThread() }
         await reload()
     }
 
@@ -317,7 +322,7 @@ final class MailStore: ObservableObject {
         }
     }
 
-    func sidebarEntries(for email: String) -> [SidebarEntry] {
+    func systemEntries(for email: String) -> [SidebarEntry] {
         let list = labels[email] ?? []
         func label(_ id: String) -> MailLabel? { list.first { $0.id == id } }
         func entry(_ title: String, _ icon: String, _ id: String, total: Bool = false) -> SidebarEntry {
@@ -328,21 +333,25 @@ final class MailStore: ObservableObject {
         var entries = [
             entry("Inbox", "tray", SystemLabel.inbox),
             entry("Starred", "star", SystemLabel.starred),
-            entry("Important", "bookmark", SystemLabel.important),
             entry("Sent", "paperplane", SystemLabel.sent),
             entry("Drafts", "doc", SystemLabel.draft, total: true),
+            entry("Important", "bookmark", SystemLabel.important),
             SidebarEntry(title: "All Mail", icon: "envelope", mailbox: .allMail(account: email), count: 0),
             entry("Spam", "exclamationmark.octagon", SystemLabel.spam),
             entry("Trash", "trash", SystemLabel.trash),
         ]
-        // Unread counts on Starred and Important just repeat Inbox numbers.
-        entries[1].count = 0
-        entries[2].count = 0
-        entries += userLabels(email).map {
-            SidebarEntry(title: $0.name, icon: "tag", mailbox: .label(account: email, id: $0.id), count: $0.threadsUnread)
-        }
+        // Gmail shows no counts beside Starred, Sent, Important or Trash.
+        for index in [1, 2, 4, 7] { entries[index].count = 0 }
         return entries
     }
+
+    func labelEntries(for email: String) -> [SidebarEntry] {
+        userLabels(email).map {
+            SidebarEntry(title: $0.name, icon: "tag", mailbox: .label(account: email, id: $0.id), count: $0.threadsUnread)
+        }
+    }
+
+    func sidebarEntries(for email: String) -> [SidebarEntry] { systemEntries(for: email) + labelEntries(for: email) }
 
     func userLabels(_ email: String) -> [MailLabel] {
         (labels[email] ?? []).filter { !$0.isSystem }
@@ -402,7 +411,7 @@ final class MailStore: ObservableObject {
         activeSearch = ""
         category = .all
         selection = []
-        detail = nil
+        closeThread()
         showCachedList()
         await reload()
     }
@@ -410,7 +419,7 @@ final class MailStore: ObservableObject {
     func applySearch() async {
         activeSearch = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         selection = []
-        detail = nil
+        closeThread()
         threads = []
         await reload()
     }
@@ -418,7 +427,7 @@ final class MailStore: ObservableObject {
     func selectCategory(_ new: InboxCategory) async {
         category = new
         selection = []
-        detail = nil
+        closeThread()
         threads = []
         await reload()
     }
@@ -539,9 +548,10 @@ final class MailStore: ObservableObject {
             threads = (fresh + others).sorted { $0.date > $1.date }
             saveCaches(for: threads, accounts: [email])
             dropSelectionNotInList()
-            if let detail, detail.account == email, let row = fresh.first(where: { $0.id == detail.summaryID }),
-               row.messageCount != detail.messages.count {
-                await openSelected()
+            if let open = openThread, open.account == email, let row = fresh.first(where: { $0.id == open.id }),
+               row.messageCount != (detail?.messages.count ?? 0) {
+                openThread = row
+                await loadOpenThread()
             }
         } catch {
             handle(error, account: email, quietWhenOffline: true)
@@ -552,21 +562,46 @@ final class MailStore: ObservableObject {
         let visible = Set(threads.map(\.id))
         let kept = selection.intersection(visible)
         if kept != selection { selection = kept }
-        if let detail, !visible.contains(detail.summaryID) { self.detail = nil }
     }
 
     // MARK: Reading
 
     var selectedThreads: [ThreadSummary] { threads.filter { selection.contains($0.id) } }
 
-    func openSelected() async {
-        guard selection.count == 1, let row = selectedThreads.first else {
-            detailGeneration += 1
-            detail = nil
-            isLoadingDetail = false
-            return
-        }
-        guard let api = api(for: row.account) else { return }
+    /// Opens a conversation in place of the list and marks it read.
+    func open(_ row: ThreadSummary) async {
+        openThread = row
+        selection = []
+        await loadOpenThread()
+    }
+
+    func closeThread() {
+        detailGeneration += 1
+        openThread = nil
+        detail = nil
+        isLoadingDetail = false
+        // Replies being written under the conversation move to the corner instead of vanishing.
+        let inline = composeSessions.values.filter(\.isInline)
+        guard !inline.isEmpty else { return }
+        for session in inline { session.isInline = false }
+        composeOrder = composeOrder
+    }
+
+    /// Moves to the next (1) or previous (-1) conversation in the list.
+    func openNeighbor(_ offset: Int) async {
+        guard let current = openThread, let index = threads.firstIndex(where: { $0.id == current.id }),
+              threads.indices.contains(index + offset) else { return }
+        await open(threads[index + offset])
+    }
+
+    /// The conversations a toolbar button or menu command acts on.
+    var actionTargets: [ThreadSummary] {
+        if let openThread { return [openThread] }
+        return selectedThreads
+    }
+
+    func loadOpenThread() async {
+        guard let row = openThread, let api = api(for: row.account) else { return }
         detailGeneration += 1
         let generation = detailGeneration
         if detail?.summaryID != row.id { detail = nil }
@@ -645,32 +680,36 @@ final class MailStore: ObservableObject {
         guard !targets.isEmpty else { return }
         let before = threads
         let previousSelection = selection
+        let previousOpen = openThread
         let previousDetail = detail
         let targetIDs = Set(targets.map(\.id))
-        var nextSelection: String?
-        if let lastIndex = threads.lastIndex(where: { targetIDs.contains($0.id) }) {
-            nextSelection = threads[(lastIndex + 1)...].first { !targetIDs.contains($0.id) }?.id
-                ?? threads[..<lastIndex].last { !targetIDs.contains($0.id) }?.id
-        }
 
         // Show the change straight away; put it back if Gmail refuses.
-        var removedSelected = false
         var updated = [ThreadSummary]()
         for var thread in threads {
             if targetIDs.contains(thread.id) {
                 thread.labelIDs = Self.applied(action, to: thread.labelIDs)
                 updateCachedLabels(thread)
                 if !belongsInView(thread.labelIDs) {
-                    if selection.contains(thread.id) { removedSelected = true }
+                    selection.remove(thread.id)
                     continue
                 }
             }
             updated.append(thread)
         }
         threads = updated
-        if removedSelected {
-            detail = nil
-            selection = nextSelection.map { [$0] } ?? []
+
+        var leftConversation = false
+        if var open = openThread, targetIDs.contains(open.id) {
+            switch action {
+            case .archive, .trash, .spam, .moveToInbox, .untrash, .notSpam, .markUnread:
+                // Like Gmail, moving or un-reading a conversation goes back to the list.
+                closeThread()
+                leftConversation = true
+            default:
+                open.labelIDs = Self.applied(action, to: open.labelIDs)
+                openThread = open
+            }
         }
 
         if offerUndo, let title = action.undoTitle, let inverse = action.inverse {
@@ -690,7 +729,8 @@ final class MailStore: ObservableObject {
         if let failure {
             threads = before
             selection = previousSelection
-            detail = previousDetail
+            openThread = previousOpen
+            if leftConversation { detail = previousDetail }
             undo = nil
             handle(failure, account: targets.first?.account)
             return
@@ -712,10 +752,33 @@ final class MailStore: ObservableObject {
 
     // MARK: Compose
 
-    func beginCompose(_ draft: ComposeDraft) -> UUID {
+    func beginCompose(_ draft: ComposeDraft, inline: Bool = false, origin: String? = nil) -> UUID {
         let session = ComposeSession(draft: draft, store: self)
+        session.isInline = inline
+        session.originThreadID = origin ?? draft.threadID
         composeSessions[session.id] = session
+        composeOrder.append(session.id)
         return session.id
+    }
+
+    var dockedSessions: [ComposeSession] {
+        composeOrder.compactMap { composeSessions[$0] }.filter { !$0.isInline && $0.id != maximizedCompose }
+    }
+
+    func inlineSessions(for threadID: String) -> [ComposeSession] {
+        composeOrder.compactMap { composeSessions[$0] }.filter { $0.isInline && $0.originThreadID == threadID }
+    }
+
+    /// Moves a reply from under the conversation into its own window in the corner.
+    func popOut(_ id: UUID) {
+        guard let session = composeSessions[id] else { return }
+        session.isInline = false
+        composeOrder.removeAll { $0 == id }
+        composeOrder.append(id)
+    }
+
+    func toggleMaximized(_ id: UUID) {
+        maximizedCompose = maximizedCompose == id ? nil : id
     }
 
     func newMessage() -> UUID? {
@@ -723,12 +786,12 @@ final class MailStore: ObservableObject {
         return email.map { beginCompose(ComposeDraft(account: $0)) }
     }
 
-    func reply(_ rendered: RenderedMessage, all: Bool, account email: String) -> UUID? {
+    func reply(_ rendered: RenderedMessage, all: Bool, account email: String, inline: Bool = false) -> UUID? {
         guard let account = account(email) else { return nil }
-        return beginCompose(ComposeFactory.reply(to: rendered, account: account, replyAll: all))
+        return beginCompose(ComposeFactory.reply(to: rendered, account: account, replyAll: all), inline: inline)
     }
 
-    func forward(_ rendered: RenderedMessage, account email: String) async -> UUID? {
+    func forward(_ rendered: RenderedMessage, account email: String, inline: Bool = false) async -> UUID? {
         guard let account = account(email) else { return nil }
         var draft = ComposeFactory.forward(rendered, account: account)
         for info in rendered.message.attachments {
@@ -739,7 +802,7 @@ final class MailStore: ObservableObject {
                 banner = "Couldn't include \(info.filename) in the forward: \(error.localizedDescription)"
             }
         }
-        return beginCompose(draft)
+        return beginCompose(draft, inline: inline, origin: rendered.message.threadID)
     }
 
     func resumeDraft(_ rendered: RenderedMessage, account email: String) async -> UUID? {
@@ -758,13 +821,17 @@ final class MailStore: ObservableObject {
         }
     }
 
-    func endCompose(_ id: UUID) { composeSessions[id] = nil }
+    func endCompose(_ id: UUID) {
+        composeSessions[id] = nil
+        composeOrder.removeAll { $0 == id }
+        if maximizedCompose == id { maximizedCompose = nil }
+    }
 
     func didSendMail(account email: String) async {
         historyIDs[email] = nil
         await refreshLabels(email)
         await reload()
-        if selection.count == 1 { await openSelected() }
+        if openThread?.account == email { await loadOpenThread() }
     }
 }
 
@@ -787,6 +854,10 @@ final class ComposeSession: ObservableObject, Identifiable {
     @Published var isSending = false
     @Published var status = ""
     @Published var errorText: String?
+    @Published var isInline = false
+    @Published var isMinimized = false
+    /// The conversation this reply or forward was started from.
+    var originThreadID: String?
 
     private unowned let store: MailStore
     private var lastSaved: ComposeDraft?

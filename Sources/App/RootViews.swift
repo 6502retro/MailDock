@@ -12,10 +12,11 @@ struct RootView: View {
             } else if store.accounts.isEmpty {
                 WelcomeView()
             } else {
-                MainSplitView()
+                MainShell()
             }
         }
-        .overlay(alignment: .bottom) { StatusOverlay() }
+        .background(Theme.canvas)
+        .overlay(alignment: .bottomLeading) { Snackbar() }
         .sheet(isPresented: Binding(get: { store.isSigningIn }, set: { _ in })) { SignInWaitingView() }
         .onAppear {
             store.openURL = { NSWorkspace.shared.open($0) }
@@ -43,55 +44,6 @@ struct SignInWaitingView: View {
         }
         .padding(28)
         .frame(width: 400)
-    }
-}
-
-struct StatusOverlay: View {
-    @EnvironmentObject private var store: MailStore
-
-    var body: some View {
-        VStack(spacing: 8) {
-            if let undo = store.undo {
-                HStack(spacing: 14) {
-                    Text(undo.title)
-                    Button("Undo") { Task { await store.performUndo() } }
-                        .buttonStyle(.link)
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 9)
-                .background(.regularMaterial, in: Capsule())
-                .shadow(radius: 4)
-                .task(id: undo.title + String(undo.targets.count)) {
-                    try? await Task.sleep(nanoseconds: 7_000_000_000)
-                    if !Task.isCancelled { store.undo = nil }
-                }
-            }
-            if let banner = store.banner {
-                HStack(spacing: 10) {
-                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-                    Text(banner).lineLimit(3)
-                    Button {
-                        store.banner = nil
-                    } label: {
-                        Image(systemName: "xmark")
-                    }
-                    .buttonStyle(.plain)
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 9)
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
-                .shadow(radius: 4)
-            }
-            if store.isOffline {
-                Label("Offline", systemImage: "wifi.slash")
-                    .font(.caption)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 5)
-                    .background(.regularMaterial, in: Capsule())
-            }
-        }
-        .padding(.bottom, 14)
-        .frame(maxWidth: 560)
     }
 }
 
@@ -172,13 +124,30 @@ struct WelcomeView: View {
     @EnvironmentObject private var store: MailStore
 
     var body: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "tray.2.fill").font(.system(size: 54)).foregroundStyle(.tint)
-            Text("Add your first Gmail account").font(.title.weight(.semibold))
-            Button("Add Gmail Account") { Task { await store.addAccount() } }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
+        VStack(spacing: 18) {
+            Image(nsImage: NSApp.applicationIconImage)
+                .resizable()
+                .frame(width: 88, height: 88)
+            Text("Add your first Gmail account")
+                .font(.system(size: 24))
+                .foregroundStyle(Theme.text)
+            Text("You can add more accounts later. They'll all appear in the sidebar.")
+                .font(.system(size: 14))
+                .foregroundStyle(Theme.mutedText)
+            Button {
+                Task { await store.addAccount() }
+            } label: {
+                Text("Add Gmail account")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(Theme.onAccent)
+                    .padding(.horizontal, 24)
+                    .frame(height: 40)
+                    .background(Theme.accent, in: Capsule())
+            }
+            .buttonStyle(.plain)
         }
+        .padding(48)
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 16))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
@@ -221,94 +190,5 @@ struct SettingsView: View {
         } message: {
             Text(confirmRemoval ?? "")
         }
-    }
-}
-
-struct MainSplitView: View {
-    @EnvironmentObject private var store: MailStore
-    @Environment(\.openWindow) private var openWindow
-
-    var body: some View {
-        NavigationSplitView {
-            SidebarView()
-                .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 320)
-        } content: {
-            ThreadListView()
-                .navigationSplitViewColumnWidth(min: 300, ideal: 380, max: 560)
-        } detail: {
-            ReaderView()
-        }
-        .toolbar {
-            ToolbarItem(placement: .navigation) {
-                Button {
-                    if let id = store.newMessage() { openWindow(id: "compose", value: id) }
-                } label: {
-                    Label("New Message", systemImage: "square.and.pencil")
-                }
-                .help("New Message")
-            }
-        }
-    }
-}
-
-struct SidebarView: View {
-    @EnvironmentObject private var store: MailStore
-    @State private var collapsed: Set<String> = []
-
-    private var selection: Binding<Mailbox?> {
-        Binding(get: { store.mailbox }, set: { new in Task { await store.selectMailbox(new) } })
-    }
-
-    var body: some View {
-        List(selection: selection) {
-            if store.accounts.count > 1 {
-                Label("All Inboxes", systemImage: "tray.2")
-                    .badge(store.unreadInboxTotal)
-                    .tag(Mailbox.allInboxes)
-            }
-            ForEach(store.accounts) { account in
-                Section(isExpanded: expansion(for: account.email)) {
-                    if account.needsSignIn {
-                        Button {
-                            Task { await store.addAccount() }
-                        } label: {
-                            Label("Sign in again", systemImage: "exclamationmark.circle")
-                                .foregroundStyle(.orange)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    ForEach(store.sidebarEntries(for: account.email)) { entry in
-                        Label(entry.title, systemImage: entry.icon)
-                            .badge(entry.count)
-                            .tag(entry.mailbox)
-                    }
-                } header: {
-                    HStack(spacing: 6) {
-                        Circle().fill(account.color).frame(width: 8, height: 8)
-                        Text(account.email).lineLimit(1).truncationMode(.middle)
-                    }
-                }
-            }
-        }
-        .listStyle(.sidebar)
-        .safeAreaInset(edge: .bottom) {
-            Button {
-                Task { await store.addAccount() }
-            } label: {
-                Label("Add Account", systemImage: "plus")
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .buttonStyle(.plain)
-            .padding(10)
-            .background(.bar)
-        }
-    }
-
-    private func expansion(for email: String) -> Binding<Bool> {
-        Binding(
-            get: { !collapsed.contains(email) },
-            set: { open in
-                if open { collapsed.remove(email) } else { collapsed.insert(email) }
-            })
     }
 }

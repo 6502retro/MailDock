@@ -628,7 +628,9 @@ final class StoreTests: XCTestCase {
     func testSidebarLayout() async {
         let s = await signedInStore()
         let titles = s.sidebarEntries(for: "work@x.com").map(\.title)
-        XCTAssertEqual(titles, ["Inbox", "Starred", "Important", "Sent", "Drafts", "All Mail", "Spam", "Trash", "Work"])
+        XCTAssertEqual(titles, ["Inbox", "Starred", "Sent", "Drafts", "Important", "All Mail", "Spam", "Trash", "Work"])
+        XCTAssertEqual(s.labelEntries(for: "work@x.com").map(\.title), ["Work"])
+        XCTAssertEqual(s.systemEntries(for: "work@x.com").first?.count, 0)
         XCTAssertEqual(s.sidebarEntries(for: "work@x.com").last?.count, 2)
     }
     func testAccountsPersistAcrossRelaunchAndCachedListShowsInstantly() async {
@@ -669,37 +671,116 @@ final class StoreTests: XCTestCase {
         work.add("w1")
         let s = await signedInStore()
         await s.selectMailbox(.label(account: "work@x.com", id: "INBOX"))
-        s.selection = [s.threads[0].id]
-        await s.openSelected()
+        await s.open(s.threads[0])
         XCTAssertEqual(s.detail?.messages.count, 1)
+        XCTAssertEqual(s.openThread?.isUnread, false)
         XCTAssertEqual(s.detail?.messages[0].document.plainText, "body of w1")
         XCTAssertFalse(s.threads[0].isUnread)
         XCTAssertFalse(work.threads["w1"]!.labels.contains("UNREAD"))
     }
-    func testArchiveMovesToNextThreadAndUndoRestores() async {
+    func testArchiveFromConversationReturnsToListAndUndoRestores() async {
         work.add("a", date: 1); work.add("b", date: 2); work.add("c", date: 3)
         let s = await signedInStore()
         await s.selectMailbox(.label(account: "work@x.com", id: "INBOX"))
-        let b = s.threads.first { $0.threadID == "b" }!
-        s.selection = [b.id]
-        await s.perform(.archive, on: [b])
+        await s.open(s.threads.first { $0.threadID == "b" }!)
+        XCTAssertEqual(s.actionTargets.map(\.threadID), ["b"])
+        await s.perform(.archive, on: s.actionTargets)
         XCTAssertEqual(s.threads.map(\.threadID), ["c", "a"])
-        XCTAssertEqual(s.selectedThreads.map(\.threadID), ["a"])
+        XCTAssertNil(s.openThread)
+        XCTAssertNil(s.detail)
         XCTAssertFalse(work.threads["b"]!.labels.contains("INBOX"))
         XCTAssertEqual(s.undo?.title, "Conversation archived")
         await s.performUndo()
         XCTAssertEqual(s.threads.map(\.threadID), ["c", "b", "a"])
         XCTAssertNil(s.undo)
     }
+    func testStarKeepsConversationOpenAndUpdatesIt() async {
+        work.add("a")
+        let s = await signedInStore()
+        await s.selectMailbox(.label(account: "work@x.com", id: "INBOX"))
+        await s.open(s.threads[0])
+        await s.perform(.star, on: s.actionTargets)
+        XCTAssertEqual(s.openThread?.isStarred, true)
+        XCTAssertNotNil(s.detail)
+        await s.perform(.markUnread, on: s.actionTargets)
+        XCTAssertNil(s.openThread, "mark unread goes back to the list, as in Gmail")
+        XCTAssertTrue(s.threads[0].isUnread)
+    }
+    func testCheckedRowsActTogetherAndLeaveSelection() async {
+        work.add("a", date: 1); work.add("b", date: 2); work.add("c", date: 3)
+        let s = await signedInStore()
+        await s.selectMailbox(.label(account: "work@x.com", id: "INBOX"))
+        s.selection = Set(s.threads.filter { $0.threadID != "b" }.map(\.id))
+        XCTAssertEqual(s.actionTargets.count, 2)
+        await s.perform(.trash, on: s.actionTargets)
+        XCTAssertEqual(s.threads.map(\.threadID), ["b"])
+        XCTAssertTrue(s.selection.isEmpty)
+    }
+    func testNextAndPreviousConversation() async {
+        work.add("a", date: 1); work.add("b", date: 2); work.add("c", date: 3)
+        let s = await signedInStore()
+        await s.selectMailbox(.label(account: "work@x.com", id: "INBOX"))
+        await s.open(s.threads[0])
+        await s.openNeighbor(1)
+        XCTAssertEqual(s.openThread?.threadID, "b")
+        XCTAssertEqual(s.detail?.threadID, "b")
+        await s.openNeighbor(-1)
+        await s.openNeighbor(-1)
+        XCTAssertEqual(s.openThread?.threadID, "c", "stays put at the top")
+    }
+    func testChangingMailboxClosesConversation() async {
+        work.add("a")
+        let s = await signedInStore()
+        await s.selectMailbox(.label(account: "work@x.com", id: "INBOX"))
+        await s.open(s.threads[0])
+        await s.selectMailbox(.allMail(account: "work@x.com"))
+        XCTAssertNil(s.openThread)
+    }
+    func testComposeWindowsDockInlineAndFullScreen() async {
+        work.add("w")
+        let s = await signedInStore()
+        await s.selectMailbox(.label(account: "work@x.com", id: "INBOX"))
+        let first = s.newMessage()!
+        let second = s.newMessage()!
+        XCTAssertEqual(s.dockedSessions.map(\.id), [first, second].map { s.composeSessions[$0]!.id })
+        XCTAssertEqual(s.composeOrder, [first, second])
+        s.toggleMaximized(first)
+        XCTAssertEqual(s.dockedSessions.count, 1, "the full-screen one leaves the dock")
+        s.toggleMaximized(first)
+        await s.open(s.threads[0])
+        let reply = s.reply(s.detail!.replyTarget!, all: false, account: "work@x.com", inline: true)!
+        XCTAssertEqual(s.inlineSessions(for: "w").count, 1)
+        XCTAssertEqual(s.dockedSessions.count, 2)
+        s.popOut(reply)
+        XCTAssertEqual(s.inlineSessions(for: "w").count, 0)
+        XCTAssertEqual(s.composeOrder.last, reply)
+        let another = s.reply(s.detail!.replyTarget!, all: false, account: "work@x.com", inline: true)!
+        s.closeThread()
+        XCTAssertEqual(s.dockedSessions.count, 4, "leaving the conversation keeps the reply")
+        s.endCompose(another)
+        s.endCompose(first)
+        XCTAssertEqual(s.composeOrder, [second, reply])
+    }
+    func testInlineForwardBelongsToItsConversation() async {
+        work.add("w")
+        let s = await signedInStore()
+        await s.selectMailbox(.label(account: "work@x.com", id: "INBOX"))
+        await s.open(s.threads[0])
+        let id = await s.forward(s.detail!.replyTarget!, account: "work@x.com", inline: true)
+        XCTAssertNotNil(id)
+        XCTAssertEqual(s.inlineSessions(for: "w").map(\.id), [id!])
+        XCTAssertNil(s.composeSessions[id!]!.draft.threadID)
+    }
     func testFailedActionPutsEverythingBack() async {
         work.add("a")
         let s = await signedInStore()
         await s.selectMailbox(.label(account: "work@x.com", id: "INBOX"))
-        s.selection = [s.threads[0].id]
+        await s.open(s.threads[0])
         work.failNext = MailError.api(status: 500, message: "boom")
-        await s.perform(.trash, on: s.threads)
+        await s.perform(.trash, on: s.actionTargets)
         XCTAssertEqual(s.threads.map(\.threadID), ["a"])
-        XCTAssertEqual(s.selection.count, 1)
+        XCTAssertEqual(s.openThread?.threadID, "a")
+        XCTAssertNotNil(s.detail)
         XCTAssertNotNil(s.banner)
         XCTAssertNil(s.undo)
     }
@@ -791,9 +872,8 @@ final class StoreTests: XCTestCase {
         work.add("w")
         let s = await signedInStore()
         await s.selectMailbox(.label(account: "work@x.com", id: "INBOX"))
-        s.selection = [s.threads[0].id]
-        await s.openSelected()
-        let id = s.reply(s.detail!.replyTarget!, all: false, account: "work@x.com")!
+        await s.open(s.threads[0])
+        let id = s.reply(s.detail!.replyTarget!, all: false, account: "work@x.com", inline: true)!
         let session = s.composeSessions[id]!
         session.draft.body = "Thanks!\n" + session.draft.body
         let sent = await session.send()
@@ -804,6 +884,9 @@ final class StoreTests: XCTestCase {
         XCTAssertTrue(raw.contains("In-Reply-To: <w@x>"))
         XCTAssertTrue(raw.contains("From: \"Name\" <work@x.com>"))
         XCTAssertEqual(home.sent.count, 0)
+        s.endCompose(id)
+        XCTAssertTrue(s.composeOrder.isEmpty)
+        XCTAssertNotNil(s.detail, "the conversation stays open after replying")
     }
     func testAutosaveThenSendRemovesDraftAndNeverOrphansOne() async throws {
         let s = await signedInStore()
