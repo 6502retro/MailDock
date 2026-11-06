@@ -542,11 +542,24 @@ struct EmailBlockView: View {
         case .rule:
             Divider()
         case .text(let runs, let style):
-            Text(attributed(runs))
+            let text = Text(attributed(runs))
                 .font(font(style))
                 .lineSpacing(3)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            // On the Mac, selectable text swallows clicks on its links, so
+            // paragraphs with links are clickable and the rest stay selectable.
+            if runs.contains(where: { $0.link != nil }) {
+                text
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .environment(\.openURL, OpenURLAction { url in
+                        NSWorkspace.shared.open(url)
+                        return .handled
+                    })
+                    .contextMenu { LinkMenu(links: runs.compactMap(\.link)) }
+            } else {
+                text
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         case .image(let image):
             EmailImageView(image: image, message: message, account: account, showImages: showImages)
         }
@@ -573,7 +586,12 @@ struct EmailBlockView: View {
             if run.code { intent.insert(.code) }
             if run.strike { intent.insert(.strikethrough) }
             if !intent.isEmpty { piece.inlinePresentationIntent = intent }
-            if let link = run.link { piece.link = link }
+            if let link = run.link {
+                piece.link = link
+                // Explicit color and underline, so links stand out like they do in Gmail.
+                piece.swiftUI.foregroundColor = Theme.link
+                piece.swiftUI.underlineStyle = .single
+            }
             output += piece
         }
         return output
@@ -651,5 +669,28 @@ struct EmailImageView: View {
             }
         }
         if let data { loaded = NSImage(data: data) }
+    }
+}
+
+/// Right-click on a paragraph to open or copy any link in it.
+struct LinkMenu: View {
+    let links: [URL]
+
+    var body: some View {
+        ForEach(Array(Set(links)).sorted { $0.absoluteString < $1.absoluteString }, id: \.self) { url in
+            Menu(Self.label(url)) {
+                Button("Open Link") { NSWorkspace.shared.open(url) }
+                Button("Copy Link") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(url.absoluteString, forType: .string)
+                }
+            }
+        }
+    }
+
+    private static func label(_ url: URL) -> String {
+        if url.scheme == "mailto" { return url.absoluteString.replacingOccurrences(of: "mailto:", with: "") }
+        let text = (url.host ?? "") + url.path
+        return text.count > 60 ? String(text.prefix(57)) + "…" : text
     }
 }

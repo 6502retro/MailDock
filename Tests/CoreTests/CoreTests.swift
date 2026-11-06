@@ -1012,3 +1012,27 @@ final class ColumnLayoutTests: XCTestCase {
         XCTAssertEqual(EmailRenderer.render(message: noPlain).plainText, "snip")
     }
 }
+
+final class LinkTests: XCTestCase {
+    func testAnchorsKeepTheirAddressThroughNestedTags() {
+        let d = EmailRenderer.renderHTML(#"<p>Review the <a href="https://stripe.com/legal/connect-account"><span style="text-decoration:underline"><b>Connected Account Agreement</b></span></a>, then <a href='https://x.co/b?c=1&amp;d=2'>here</a>.</p>"#)
+        guard case .text(let runs, _) = d.blocks[0].kind else { return XCTFail() }
+        XCTAssertEqual(runs.first { $0.text == "Connected Account Agreement" }?.link?.absoluteString, "https://stripe.com/legal/connect-account")
+        XCTAssertTrue(runs.first { $0.text == "Connected Account Agreement" }!.bold)
+        XCTAssertEqual(runs.first { $0.text == "here" }?.link?.absoluteString, "https://x.co/b?c=1&d=2")
+        XCTAssertNil(runs.first { $0.text.contains("Review") }?.link)
+    }
+    func testBareAddressesInHTMLBecomeLinks() {
+        let d = EmailRenderer.renderHTML("<p><b>Visit https://example.com/page.</b> Thanks</p>")
+        guard case .text(let runs, _) = d.blocks[0].kind else { return XCTFail() }
+        XCTAssertEqual(runs.map(\.text).joined(), "Visit https://example.com/page. Thanks")
+        let link = runs.first { $0.link != nil }!
+        XCTAssertEqual(link.text, "https://example.com/page")
+        XCTAssertTrue(link.bold)
+    }
+    func testLinkedImagesKeepTheirAddress() {
+        let d = EmailRenderer.renderHTML(#"<a href="https://shop.example.com"><img src="https://img.example.com/b.png" width="300"></a>"#)
+        guard case .image(let image) = d.blocks[0].kind else { return XCTFail() }
+        XCTAssertEqual(image.link?.host, "shop.example.com")
+    }
+}

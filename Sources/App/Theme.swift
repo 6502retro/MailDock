@@ -36,6 +36,7 @@ enum Theme {
     static let mutedText = color(0x5F6368, 0x9AA0A6)
     static let accent = color(0x0B57D0, 0xA8C7FA)
     static let onAccent = color(0xFFFFFF, 0x062E6F)
+    static let link = color(0x1155CC, 0x8AB4F8)
     static let chip = color(0xDDE3EA, 0x3C3D41)
     static let star = color(0xF4B400, 0xFDD663)
     static let danger = color(0xC5221F, 0xF28B82)

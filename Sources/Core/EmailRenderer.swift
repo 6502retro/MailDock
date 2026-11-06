@@ -521,6 +521,16 @@ private struct HTMLBuilder {
             runs.removeAll { $0.text.isEmpty }
         }
         guard !runs.isEmpty else { return }
+        // Web addresses typed as plain text become links too.
+        runs = runs.flatMap { run -> [InlineRun] in
+            guard run.link == nil, run.text.contains("http") else { return [run] }
+            return EmailRenderer.linkified(run.text).map {
+                var piece = run
+                piece.text = $0.text
+                piece.link = $0.link
+                return piece
+            }
+        }
         let style: BlockTextStyle = preCount > 0 ? .preformatted : headings.last.map(BlockTextStyle.heading) ?? .body
         var block = EmailBlock(id: blocks.count, kind: .text(runs, style), quoteDepth: quoteCount,
                                indent: max(0, lists.count - 1), prefix: pendingPrefix)

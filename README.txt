@@ -1,4 +1,4 @@
-MailDock 1.1.1
+MailDock 1.1.2
 ==============
 A native Mac app for Gmail, with every account open in one sidebar.
 It's laid out like Gmail on the web, but it isn't a web page.
@@ -59,7 +59,8 @@ USING IT
 - Search works just like Gmail: from:ann has:attachment older_than:1y
 - Inbox tabs (Primary, Promotions and so on) are above the message list.
 - Images stay hidden until you click Show Images, so senders can't tell you
-  opened their message. Links open in your default browser when clicked.
+  opened their message. Links are blue and underlined, and open in your
+  default browser. Right-click a paragraph to copy one of its links.
 - New mail is checked for every 60 seconds while the app is open.
 
 SHORTCUTS
